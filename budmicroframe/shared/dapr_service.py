@@ -294,6 +294,7 @@ class DaprService(DaprClient):
         self,
         keys: Union[str, List[str]],
         store_name: Optional[str] = None,
+        secret_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Sync secrets from the specified secret store.
 
@@ -306,12 +307,14 @@ class DaprService(DaprClient):
         """
         app_settings = get_app_settings()
         store_name = store_name or app_settings.secretstore_name
+        secret_name = secret_name or app_settings.secretstore_secret_name
         assert store_name, "secretstore is not configured."
+
         secrets: Dict[str, Any] = {}
         keys = [keys] if isinstance(keys, str) else keys
         for key in keys:
             try:
-                value = self.get_secret(store_name=store_name, key=key).secret.get(key)
+                value = self.get_secret(store_name=store_name, key=secret_name or key).secret.get(key)
                 if value is not None:
                     secrets[key] = value
             except Exception as e:

@@ -174,6 +174,7 @@ class BaseAppConfig(BaseConfig):
 
     # Secret store
     secretstore_name: Optional[str] = None
+    secretstore_secret_name: Optional[str] = Field(None, alias="SECRETSTORE_SECRET_NAME")
 
     # State store
     statestore_name: Optional[str] = None
