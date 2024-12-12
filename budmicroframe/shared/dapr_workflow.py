@@ -202,13 +202,17 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
 
         self.workflow_runtime: WorkflowRuntime = WorkflowRuntime(port=dapr_grpc_or_http_port)
         self.wf_client: Optional[DaprWorkflowClient] = None
+        self.is_running = False
+
         self.registered_workflows = {}
         self.registered_activities = {}
         self.registered_jobs = {}
 
     def start_workflow_runtime(self) -> None:
-        self.workflow_runtime.start()
-        self.wf_client = DaprWorkflowClient()
+        if not self.is_running:
+            self.workflow_runtime.start()
+            self.wf_client = DaprWorkflowClient()
+            self.is_running = True
 
     def shutdown_workflows(self) -> None:
         """Shutdown the workflow runtime if it is currently running.
@@ -220,7 +224,10 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
         Raises:
             Exception: If there is an error during the shutdown of workflows.
         """
-        self.workflow_runtime.shutdown()
+        if self.is_running:
+            self.workflow_runtime.shutdown()
+            self.wf_client = None
+            self.is_running = False
 
     def register_workflow(self, func: Callable[..., None], name: Optional[str] = None) -> Callable[..., None]:
         """Register a workflow function.
