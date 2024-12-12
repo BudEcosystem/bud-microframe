@@ -30,7 +30,7 @@ from . import logging
 from .constants import Environment, LogLevel
 
 
-load_dotenv()
+load_dotenv("./.env")
 
 
 def enable_periodic_sync_from_store(is_global: bool = False) -> Dict[str, Any]:

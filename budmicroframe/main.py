@@ -89,7 +89,7 @@ async def dapr_lifespan(app: FastAPI) -> AsyncIterator[None]:
     except asyncio.CancelledError:
         logger.exception("Failed to cleanup config & store sync.")
 
-    DaprWorkflow().shutdown_workflows()
+    DaprWorkflow().shutdown_workflow_runtime()
 
 
 def configure_app(

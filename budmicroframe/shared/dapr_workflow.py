@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Union
 
+from dapr.conf import settings as dapr_settings
 from dapr.ext.workflow import (
     DaprWorkflowClient,
     WorkflowRuntime,
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session, relationship
 from sqlalchemy.sql import func
 
 from ..commons import logging, singleton
-from ..commons.config import get_app_settings
+from ..commons.config import get_app_settings, get_secrets_settings
 from ..commons.constants import WorkflowStatus
 from ..commons.schemas import (
     ErrorResponse,
@@ -191,16 +192,25 @@ class WorkflowCRUD:
 
 
 class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
-    def __init__(self, dapr_grpc_or_http_port: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        dapr_grpc_or_http_port: Optional[int] = None,
+        dapr_api_token: Optional[str] = None,
+    ) -> None:
         super().__init__()
 
         app_settings = get_app_settings()
-        if app_settings is not None:
-            dapr_grpc_or_http_port = dapr_grpc_or_http_port or app_settings.dapr_grpc_port
+        secrets_settings = get_secrets_settings()
+        if app_settings is not None and secrets_settings is not None:
+            self.dapr_grpc_or_http_port = dapr_grpc_or_http_port or app_settings.dapr_grpc_port
+            dapr_api_token = dapr_api_token or secrets_settings.dapr_api_token
         else:
-            logger.warning("App settings are not registered, some funcionalities might not work as intended.")
+            self.dapr_grpc_or_http_port = dapr_grpc_or_http_port
+            logger.warning("App/Secrets settings are not registered, some funcionalities might not work as intended.")
 
-        self.workflow_runtime: WorkflowRuntime = WorkflowRuntime(port=dapr_grpc_or_http_port)
+        dapr_settings.DAPR_API_TOKEN = dapr_api_token
+
+        self.workflow_runtime: WorkflowRuntime = WorkflowRuntime(port=self.dapr_grpc_or_http_port)
         self.wf_client: Optional[DaprWorkflowClient] = None
         self.is_running = False
 
@@ -211,10 +221,12 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
     def start_workflow_runtime(self) -> None:
         if not self.is_running:
             self.workflow_runtime.start()
-            self.wf_client = DaprWorkflowClient()
+            self.wf_client = DaprWorkflowClient(port=self.dapr_grpc_or_http_port)
             self.is_running = True
+        else:
+            logger.warning("Workflow runtime is already running")
 
-    def shutdown_workflows(self) -> None:
+    def shutdown_workflow_runtime(self) -> None:
         """Shutdown the workflow runtime if it is currently running.
 
         This static method checks if the workflow runtime is initialized.
@@ -228,6 +240,8 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
             self.workflow_runtime.shutdown()
             self.wf_client = None
             self.is_running = False
+        else:
+            logger.warning("Workflow runtime is not running")
 
     def register_workflow(self, func: Callable[..., None], name: Optional[str] = None) -> Callable[..., None]:
         """Register a workflow function.
