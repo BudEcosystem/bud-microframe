@@ -1,5 +1,5 @@
 # Service/Clients
-dapr >= 1.13.0
+dapr >= 1.14.0
 dapr-ext-workflow
 
 # API
