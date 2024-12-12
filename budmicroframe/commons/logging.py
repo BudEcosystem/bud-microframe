@@ -23,7 +23,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Union
 
-import pythonjsonlogger.jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 
 
 def get_logger_options(log_dir: Union[str, Path], log_level: Any) -> dict:
@@ -32,7 +32,7 @@ def get_logger_options(log_dir: Union[str, Path], log_level: Any) -> dict:
         "disable_existing_loggers": False,
         "formatters": {
             "json_formatter": {
-                "()": pythonjsonlogger.jsonlogger.JsonFormatter,
+                "()": JsonFormatter,
                 "format": "%(asctime)s - [%(threadName)-12.12s] [%(levelname)s] -  %(name)s - (%(filename)s).%(funcName)s(%(lineno)d) - %(message)s",
             },
             "plain_formatter": {
