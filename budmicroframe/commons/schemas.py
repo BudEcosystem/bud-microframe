@@ -409,8 +409,9 @@ class ErrorResponse(ResponseBase):
         Returns:
             dict: The validated and potentially adjusted data.
         """
-        data["type"] = data.get("type") or cls.to_pascal_case(HTTPStatus(data["code"]).phrase, suffix="Error")
-        data["message"] = data.get("message") or HTTPStatus(data["code"]).description
+        if data.get("code") is not None:
+            data["type"] = data.get("type") or cls.to_pascal_case(HTTPStatus(data["code"]).phrase, suffix="Error")
+            data["message"] = data.get("message") or HTTPStatus(data["code"]).description
 
         return data
 
