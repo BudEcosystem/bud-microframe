@@ -2,7 +2,7 @@
 
 import asyncio
 from functools import wraps
-from typing import Any, Callable, Protocol, Tuple, Type, TypeVar, runtime_checkable
+from typing import Any, Callable, List, Optional, Protocol, Tuple, Type, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -14,10 +14,16 @@ T = TypeVar("T")
 class PubSubAPIEndpoint(Protocol):
     is_pubsub_api: bool
     request_model: Type[BaseModel]
+    include_in_api_schema: Optional[List[str]]
+    exclude_from_api_schema: Optional[List[str]]
     __call__: Callable[..., Any]
 
 
-def pubsub_api_endpoint(request_model: Type[BaseModel]) -> Callable[[Callable[..., T]], PubSubAPIEndpoint]:
+def pubsub_api_endpoint(
+    request_model: Type[BaseModel],
+    include_in_api_schema: Optional[List[str]] = None,
+    exclude_from_api_schema: Optional[List[str]] = None,
+) -> Callable[[Callable[..., T]], PubSubAPIEndpoint]:
     """Mark a function as a pubsub API endpoint.
 
     Args:
@@ -30,6 +36,8 @@ def pubsub_api_endpoint(request_model: Type[BaseModel]) -> Callable[[Callable[..
     def decorator(func: Callable[..., Any]) -> PubSubAPIEndpoint:
         func.is_pubsub_api = True  # type: ignore
         func.request_model = request_model  # type: ignore
+        func.include_in_api_schema = include_in_api_schema  # type: ignore
+        func.exclude_from_api_schema = exclude_from_api_schema  # type: ignore
 
         @wraps(func)
         async def wrapper(*args: Tuple[Any], **kwargs: Any) -> Any:

@@ -218,7 +218,9 @@ class CloudEventBase(BaseModel):
         return create_model(f"{cls.__name__}PubSub", **outer_fields)  # type: ignore
 
     @classmethod
-    def create_api_model(cls) -> Type[BaseModel]:
+    def create_api_model(
+        cls, include: Optional[List[str]] = None, exclude: Optional[List[str]] = None
+    ) -> Type[BaseModel]:
         """Create a model for API requests.
 
         This method generates a new Pydantic model for API requests by excluding
@@ -231,7 +233,10 @@ class CloudEventBase(BaseModel):
         """
         outer_fields = {}
         fields = {}
-        excluded_fields = set(CloudEventBase.model_fields) - set(cls.included_fields_in_api)
+        excluded_fields = set(CloudEventBase.model_fields) - set(include or cls.included_fields_in_api)
+        if exclude:
+            excluded_fields.update(exclude)
+
         for field_name, field_info in cls.model_fields.items():
             if field_name in CloudEventBase.model_fields and field_name not in excluded_fields:
                 outer_fields[field_name] = (field_info.annotation, field_info)

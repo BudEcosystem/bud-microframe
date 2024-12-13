@@ -146,7 +146,10 @@ def configure_app(
                 method = list(route.methods)[0].lower()
 
                 pubsub_model = request_model.create_pubsub_model()
-                api_model = request_model.create_api_model()
+                api_model = request_model.create_api_model(
+                    include=route.endpoint.include_in_api_schema,
+                    exclude=route.endpoint.exclude_from_api_schema,
+                )
 
                 openapi_schema["components"]["schemas"][pubsub_model.__name__] = pubsub_model.model_json_schema()
                 openapi_schema["components"]["schemas"][api_model.__name__] = api_model.model_json_schema()
