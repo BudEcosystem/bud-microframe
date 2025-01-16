@@ -123,7 +123,7 @@ class DBSession:
 
     def __enter__(self):
         self.session = self.database.get_session()
-        return self
+        return self.session
 
     def __exit__(self, exc_type, exc_value, traceback):
         if self.session:
