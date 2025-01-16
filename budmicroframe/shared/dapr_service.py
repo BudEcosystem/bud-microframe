@@ -16,15 +16,19 @@
 
 """Provides utility functions and wrappers for interacting with Dapr components, including service invocation, pub/sub, and state management."""
 
+import base64
 import uuid
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import ujson as json
 from aiohttp import ClientConnectionError, ClientError
 from dapr.clients import DaprClient
+from dapr.clients.grpc._crypto import DecryptOptions, EncryptOptions
 from dapr.clients.grpc._state import Concurrency, Consistency, StateOptions
 from dapr.clients.grpc.client import ConfigurationResponse
+from dapr.clients.grpc.interceptors import _ClientCallDetails
 from dapr.conf import settings as dapr_settings
+from grpc import ClientCallDetails, StreamStreamClientInterceptor
 
 from ..commons import logging
 from ..commons.config import get_app_settings, get_secrets_settings
@@ -45,6 +49,57 @@ class ServiceRegistrationException(Exception):
     """
 
     pass
+
+class DaprStreamStreamClientInterceptor(StreamStreamClientInterceptor):
+    """A client interceptor for Dapr that adds an API token to the gRPC metadata."""
+
+    def __init__(self, metadata: List[Tuple[str, str]]) -> None:
+        """Initialize the interceptor with metadata.
+
+        Args:
+            metadata (List[Tuple[str, str]]): List of metadata tuples to add to gRPC calls.
+        """
+        self._metadata = metadata
+
+    def _intercept_call(self, client_call_details: ClientCallDetails) -> ClientCallDetails:
+        """Add metadata to gRPC metadata in the RPC call details.
+
+        Args:
+            client_call_details :class: `ClientCallDetails`: object that describes a RPC
+            to be invoked
+
+        Returns:
+            :class: `ClientCallDetails` modified call details
+        """
+        metadata = []
+        if client_call_details.metadata is not None:
+            metadata = list(client_call_details.metadata)
+        metadata.extend(self._metadata)
+
+        new_call_details = _ClientCallDetails(
+            client_call_details.method,
+            client_call_details.timeout,
+            metadata,
+            client_call_details.credentials,
+            client_call_details.wait_for_ready,
+            client_call_details.compression,
+        )
+        return new_call_details
+
+    def intercept_stream_stream(self, continuation, client_call_details, request_iterator):
+        """Intercept a stream-stream RPC call.
+
+        Args:
+            continuation (Callable): The continuation function to call after intercepting the call.
+            client_call_details (ClientCallDetails): The details of the client call.
+            request_iterator (Iterator): The request iterator to send to the continuation.
+
+        Returns:
+            Iterator: The response iterator from the continuation.
+        """
+        new_call_details = self._intercept_call(client_call_details)
+        return continuation(new_call_details, request_iterator)
+
 
 
 class DaprService(DaprClient):
@@ -101,6 +156,9 @@ class DaprService(DaprClient):
         for attr, value in settings_updates.items():
             if value is not None:
                 setattr(dapr_settings, attr, value)
+                
+        if dapr_api_token:
+            kwargs["interceptors"] = [DaprStreamStreamClientInterceptor([("dapr-api-token", dapr_api_token)])]
 
         super().__init__(**kwargs)
 
@@ -468,3 +526,61 @@ class DaprService(DaprClient):
         logger.info("Published to pubsub topic %s/%s", pubsub_name, target_topic_name)
 
         return event_id
+
+    def encrypt_data(self, message: str, key_wrap_algorithm: Literal["RSA", "AES"] = "RSA") -> str:
+        r"""Encrypt data using the specified crypto component.
+
+        https://github.com/dapr/python-sdk/blob/main/examples/crypto/crypto.py
+        curl http://0.0.0.0:3511/v1.0/crypto/local-crypto/encrypt \
+            -X PUT \
+            -H "dapr-app-id: <app name>" \
+            -H "dapr-api-token: <token in env>" \
+            -H "dapr-key-name: <rsa key name env>" \
+            -H "dapr-key-wrap-algorithm: RSA-OAEP-256" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "\x68\x65\x6c\x6c\x6f\x20\x77\x6f\x72\x6c\x64"
+
+        Args:
+            message (str): The message to encrypt.
+
+        Returns:
+            str: The encrypted message.
+        """
+        app_settings = get_app_settings()
+        options = EncryptOptions(
+            component_name=app_settings.crypto_name,
+            key_name=app_settings.rsa_key_name if key_wrap_algorithm == "RSA" else app_settings.aes_symmetric_key_name,
+            key_wrap_algorithm=key_wrap_algorithm,
+        )
+
+        resp = self.encrypt(
+            data=message.encode(),
+            options=options,
+        )
+        encrypt_bytes: bytes = resp.read()
+        return base64.b64encode(encrypt_bytes).decode("utf-8")
+
+    def decrypt_data(self, encrypted_message: str, key_wrap_algorithm: Literal["RSA", "AES"] = "RSA") -> str:
+        """Decrypt data using the specified crypto component.
+
+        Args:
+            encrypted_message (str): The encrypted message to decrypt.
+
+        Returns:
+            str: The decrypted message.
+        """
+        app_settings = get_app_settings()
+        options = DecryptOptions(
+            component_name=app_settings.crypto_name,
+            key_name=app_settings.rsa_key_name if key_wrap_algorithm == "RSA" else app_settings.aes_symmetric_key_name,
+        )
+
+        # Convert base64 string back to binary data
+        encrypted_bytes = base64.b64decode(encrypted_message.encode("utf-8"))
+
+        resp = self.decrypt(
+            data=encrypted_bytes,
+            options=options,
+        )
+        decrypt_bytes: bytes = resp.read()
+        return decrypt_bytes.decode("utf-8")
