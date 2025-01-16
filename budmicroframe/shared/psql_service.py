@@ -111,6 +111,26 @@ class Database(metaclass=Singleton):
 
     def close_session(self, session: "Session"):
         session.close()
+        
+
+class DBSession:
+    """Provides instance of database session."""
+    __slots__ = ("database", "session")
+    
+    def __init__(self, database: Optional[Database] = None):
+        self.database = database or Database()
+        self.session = None
+
+    def __enter__(self):
+        self.session = self.database.get_session()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.session:
+            self.database.close_session(self.session)
+            self.session = None
+        if exc_type:
+            logger.error("Failed to close database session: %s", exc_value)
 
 
 class CRUDMixin(Generic[ModelType, DBCreateSchemaType, DBUpdateSchemaType]):
