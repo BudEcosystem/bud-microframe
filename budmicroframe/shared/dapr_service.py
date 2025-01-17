@@ -219,6 +219,7 @@ class DaprService(DaprClient):
             "pubsub": None,
             "topic": None,
             "deadletter": None,
+            "crypto": None,
         }
         try:
             for component in metadata["components"]:
@@ -231,6 +232,9 @@ class DaprService(DaprClient):
                 elif component["type"].startswith("state."):
                     service_info["statestore"] = component["name"]
                     app_settings.statestore_name = component["name"]
+                elif component["type"].startswith("crypto."):
+                    service_info["crypto"] = component["name"]
+                    app_settings.crypto_name = component["name"]
 
             for subscription in metadata.get("subscriptions", []):
                 service_info["pubsub"] = subscription["pubsubname"]
