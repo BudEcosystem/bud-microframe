@@ -124,6 +124,8 @@ class WorkflowCRUD:
                     {"workflow_id": workflow_id, "step_id": step.id, "status": status.value} for step in workflow_steps
                 ]
                 self.workflow_steps_crud.bulk_insert(steps_to_insert)
+
+            logger.debug("New workflow run %s added", workflow_id)
         except Exception as e:
             logger.error("Failed to add new workflow run %s: %s", workflow_id, str(e))
 
@@ -174,10 +176,12 @@ class WorkflowCRUD:
 
         try:
             if step:
+                logger.debug("Workflow step found for %s:%s, %s:%s, %s", workflow_id, step.step_id, notification_hash, step.status, step.notification_status)
                 skip_notification = update_notification_status(step)
                 step.status = workflow_or_step_status
                 self.workflow_steps_crud.update(data=step, conditions={"id": step.id})
             else:
+                logger.debug("Workflow run found for %s, %s:%s, %s", workflow_id, notification_hash, run.status, run.notification_status)
                 skip_notification = update_notification_status(run)
                 if notification.payload.event == "results":
                     run.output = notification.payload.content.result
