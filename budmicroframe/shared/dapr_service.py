@@ -50,6 +50,7 @@ class ServiceRegistrationException(Exception):
 
     pass
 
+
 class DaprStreamStreamClientInterceptor(StreamStreamClientInterceptor):
     """A client interceptor for Dapr that adds an API token to the gRPC metadata."""
 
@@ -101,7 +102,6 @@ class DaprStreamStreamClientInterceptor(StreamStreamClientInterceptor):
         return continuation(new_call_details, request_iterator)
 
 
-
 class DaprService(DaprClient):
     """A service class for interacting with Dapr, providing methods for syncing configurations and secrets.
 
@@ -134,10 +134,11 @@ class DaprService(DaprClient):
         """
         app_settings = get_app_settings()
         secrets_settings = get_secrets_settings()
+        if secrets_settings is not None:
+            dapr_api_token = dapr_api_token or secrets_settings.dapr_api_token
         if app_settings is not None:
             dapr_http_port = dapr_http_port or app_settings.dapr_http_port
             dapr_grpc_port = dapr_grpc_port or app_settings.dapr_grpc_port
-            dapr_api_token = dapr_api_token or secrets_settings.dapr_api_token
             api_method_invocation_protocol = (
                 api_method_invocation_protocol or app_settings.dapr_api_method_invocation_protocol
             )
@@ -157,9 +158,6 @@ class DaprService(DaprClient):
             if value is not None:
                 setattr(dapr_settings, attr, value)
                 
-        if dapr_api_token:
-            kwargs["interceptors"] = [DaprStreamStreamClientInterceptor([("dapr-api-token", dapr_api_token)])]
-
         super().__init__(**kwargs)
 
     @retry(
@@ -531,6 +529,31 @@ class DaprService(DaprClient):
 
         return event_id
 
+
+class DaprServiceCrypto(DaprService):
+    def __init__(
+        self,
+        dapr_http_port: Optional[int] = None,
+        dapr_grpc_port: Optional[int] = None,
+        dapr_api_token: Optional[str] = None,
+        api_method_invocation_protocol: Optional[str] = None,
+        health_timeout: Optional[int] = None,
+        **kwargs: Any,
+    ):
+        secrets_settings = get_secrets_settings()
+        if secrets_settings is not None:
+            dapr_api_token = dapr_api_token or secrets_settings.dapr_api_token
+        if dapr_api_token:
+            kwargs["interceptors"] = [DaprStreamStreamClientInterceptor([("dapr-api-token", dapr_api_token)])]
+        super().__init__(
+            dapr_http_port=dapr_http_port,
+            dapr_grpc_port=dapr_grpc_port,
+            dapr_api_token=dapr_api_token,
+            api_method_invocation_protocol=api_method_invocation_protocol,
+            health_timeout=health_timeout,
+            **kwargs,
+        )
+        
     def encrypt_data(self, message: str, key_wrap_algorithm: Literal["RSA", "AES"] = "RSA") -> str:
         r"""Encrypt data using the specified crypto component.
 
@@ -588,3 +611,4 @@ class DaprService(DaprClient):
         )
         decrypt_bytes: bytes = resp.read()
         return decrypt_bytes.decode("utf-8")
+
