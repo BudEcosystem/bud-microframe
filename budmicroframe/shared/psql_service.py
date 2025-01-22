@@ -67,7 +67,6 @@ class Database(metaclass=Singleton):
 
         if not self.is_connected:
             try:
-                logger.info(f"Connecting to password: {password}")
                 db_url = PostgresDsn.build(
                     scheme=connection_scheme,
                     username=user,
