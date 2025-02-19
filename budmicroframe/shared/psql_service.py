@@ -1,10 +1,11 @@
+from datetime import datetime, UTC
 from typing import Any, Dict, Generic, List, Literal, Optional, Tuple, Type, TypeVar, Union
 
 from pydantic import PostgresDsn
-from sqlalchemy import asc, create_engine, desc, text
+from sqlalchemy import asc, create_engine, desc, text, DateTime
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, scoped_session, sessionmaker
+from sqlalchemy.orm import Mapped, mapped_column, Session, scoped_session, sessionmaker
 
 from ..commons import logging
 from ..commons.config import get_app_settings, get_secrets_settings
@@ -110,7 +111,7 @@ class Database(metaclass=Singleton):
 
     def close_session(self, session: "Session"):
         session.close()
-        
+
 
 class DBSession:
     """Provides instance of database session."""
@@ -366,3 +367,17 @@ class CRUDMixin(Generic[ModelType, DBCreateSchemaType, DBUpdateSchemaType]):
             logger.exception("Failed to execute raw query: %s", str(e))
         finally:
             self.cleanup_session(_session if session is None else None)
+
+
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC)
+    )
+    modified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC)
+    )
