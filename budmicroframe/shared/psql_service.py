@@ -316,7 +316,7 @@ class CRUDMixin(Generic[ModelType, DBCreateSchemaType, DBUpdateSchemaType]):
             else:
                 raise ValueError("Invalid data type for upsert")
 
-            stmt = _session.query(self.model).insert().values(obj)
+            stmt = insert(self.model.__table__).values(obj)
             if conflict_target:
                 stmt = stmt.on_conflict_do_update(index_elements=conflict_target, set_=obj)
             _session.execute(stmt)
