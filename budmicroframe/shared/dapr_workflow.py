@@ -214,7 +214,7 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
 
         dapr_settings.DAPR_API_TOKEN = dapr_api_token
 
-        self.workflow_runtime: WorkflowRuntime = WorkflowRuntime(port=self.dapr_grpc_or_http_port)
+        self.workflow_runtime: WorkflowRuntime = WorkflowRuntime(host="127.0.0.1", port=self.dapr_grpc_or_http_port)
         self.wf_client: Optional[DaprWorkflowClient] = None
         self.is_running = False
 
