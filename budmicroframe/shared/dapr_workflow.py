@@ -438,13 +438,13 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
                 status=WorkflowStatus.PENDING,
                 eta=eta,
             )
-            try:
-                orchestrator_state = self.wf_client.wait_for_workflow_start(
-                    instance_id=instance_id, fetch_payloads=False, timeout_in_seconds=60
-                )
-            except Exception as e:
-                logger.exception("Waiting for workflow resulted in error: %s", e)
-                orchestrator_state = None
+            # try:
+            #     orchestrator_state = self.wf_client.wait_for_workflow_start(
+            #         instance_id=instance_id, fetch_payloads=False, timeout_in_seconds=60
+            #     )
+            # except Exception as e:
+            #     logger.exception("Waiting for workflow resulted in error: %s", e)
+            orchestrator_state = None
             if orchestrator_state is not None and orchestrator_state.runtime_status == DaprWorkflowStatus.FAILED:
                 wf_state = await self.get_workflow_details(instance_id, fetch_payloads=True)
                 response.status = WorkflowStatus.FAILED
