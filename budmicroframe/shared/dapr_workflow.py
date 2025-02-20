@@ -225,7 +225,7 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
     def start_workflow_runtime(self) -> None:
         if not self.is_running:
             self.workflow_runtime.start()
-            self.wf_client = DaprWorkflowClient(port=self.dapr_grpc_or_http_port)
+            self.wf_client = DaprWorkflowClient(host="127.0.0.1", port=self.dapr_grpc_or_http_port)
             self.is_running = True
         else:
             logger.warning("Workflow runtime is already running")
