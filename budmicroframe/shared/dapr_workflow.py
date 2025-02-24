@@ -214,7 +214,7 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
 
         dapr_settings.DAPR_API_TOKEN = dapr_api_token
 
-        self.workflow_runtime: WorkflowRuntime = WorkflowRuntime(port=self.dapr_grpc_or_http_port)
+        self.workflow_runtime: WorkflowRuntime = WorkflowRuntime(host="127.0.0.1", port=self.dapr_grpc_or_http_port)
         self.wf_client: Optional[DaprWorkflowClient] = None
         self.is_running = False
 
@@ -225,7 +225,7 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
     def start_workflow_runtime(self) -> None:
         if not self.is_running:
             self.workflow_runtime.start()
-            self.wf_client = DaprWorkflowClient(port=self.dapr_grpc_or_http_port)
+            self.wf_client = DaprWorkflowClient(host="127.0.0.1", port=self.dapr_grpc_or_http_port)
             self.is_running = True
         else:
             logger.warning("Workflow runtime is already running")
@@ -438,9 +438,13 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
                 status=WorkflowStatus.PENDING,
                 eta=eta,
             )
-            orchestrator_state = self.wf_client.wait_for_workflow_start(
-                instance_id=instance_id, fetch_payloads=False, timeout_in_seconds=60
-            )
+            # try:
+            #     orchestrator_state = self.wf_client.wait_for_workflow_start(
+            #         instance_id=instance_id, fetch_payloads=False, timeout_in_seconds=60
+            #     )
+            # except Exception as e:
+            #     logger.exception("Waiting for workflow resulted in error: %s", e)
+            orchestrator_state = None
             if orchestrator_state is not None and orchestrator_state.runtime_status == DaprWorkflowStatus.FAILED:
                 wf_state = await self.get_workflow_details(instance_id, fetch_payloads=True)
                 response.status = WorkflowStatus.FAILED
