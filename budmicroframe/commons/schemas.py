@@ -19,6 +19,7 @@
 import datetime
 import hashlib
 import math
+import json
 import re
 import uuid
 from http import HTTPStatus
@@ -260,6 +261,11 @@ class CloudEventBase(BaseModel):
         Returns:
             dict: The validated and potentially adjusted data.
         """
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                raise ValueError(f"Invalid JSON: {data}") from None
         if all(data.get(key) is not None for key in ("topic", "pubsubname", "data")):
             data.update({k: v for k, v in data["data"].items() if k not in data})
 

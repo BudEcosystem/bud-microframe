@@ -180,6 +180,11 @@ class BaseAppConfig(BaseConfig):
     statestore_name: Optional[str] = None
     cluster_info_state_key: Optional[str] = Field("cluster_info", alias="CLUSTER_INFO_STATE_KEY")
 
+    # Crypto
+    crypto_name: Optional[str] = None
+    rsa_key_name: Optional[str] = Field(None, json_schema_extra=enable_periodic_sync_from_store())
+    aes_symmetric_key_name: Optional[str] = Field(None, json_schema_extra=enable_periodic_sync_from_store())
+
     # Pubsub
     pubsub_name: Optional[str] = None
     pubsub_topic: Optional[str] = None
