@@ -11,9 +11,9 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Mapped, Session, mapped_column, scoped_session, sessionmaker
 from sqlalchemy.sql import Executable
 
-from ..common.exceptions import DatabaseException
 from ..commons import logging
 from ..commons.config import get_app_settings, get_secrets_settings
+from ..commons.exceptions import DatabaseException
 from ..commons.singleton import Singleton
 from ..commons.types import DBCreateSchemaType, DBUpdateSchemaType
 
