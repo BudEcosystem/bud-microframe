@@ -472,6 +472,67 @@ class CRUDMixin(Generic[ModelType, DBCreateSchemaType, DBUpdateSchemaType]):
             logger.exception(f"Failed to execute scalar statement: {e}")
             raise DatabaseException("Unable to execute scalar statement") from e
 
+    def scalar_one_or_none(self, stmt: Executable) -> object:
+        """Execute a SQL statement and return a single result or None.
+
+        This method executes the given SQL statement and returns either a single
+        scalar result or None if no results are found.
+
+        Args:
+            stmt (Executable): The SQLAlchemy statement to be executed.
+
+        Returns:
+            Any: The scalar result of the query, or None if no results are found.
+
+        Raises:
+            DatabaseException: If there's an error during the database operation.
+        """
+        try:
+            return self.session.execute(stmt).scalar_one_or_none()
+        except (Exception, SQLAlchemyError) as e:
+            logger.exception(f"Failed to get one model from database: {e}")
+            raise DatabaseException("Unable to get model from database") from e
+
+    def scalars_all(self, stmt: Executable) -> object:
+        """Scalars a SQL statement and return a single result or None.
+
+        This method executes the given SQL statement and returns the result.
+
+        Args:
+            stmt (Executable): The SQLAlchemy statement to be executed.
+
+        Returns:
+            Any: The result of the executed statement.
+
+        Raises:
+            DatabaseException: If there's an error during the database operation.
+        """
+        try:
+            return self.session.scalars(stmt).all()
+        except (Exception, SQLAlchemyError) as e:
+            logger.exception(f"Failed to execute statement: {e}")
+            raise DatabaseException("Unable to execute statement") from e
+
+    def execute_all(self, stmt: Executable) -> object:
+        """Execute a SQL statement and return a single result or None.
+
+        This method executes the given SQL statement and returns the result.
+
+        Args:
+            stmt (Executable): The SQLAlchemy statement to be executed.
+
+        Returns:
+            Any: The result of the executed statement.
+
+        Raises:
+            DatabaseException: If there's an error during the database operation.
+        """
+        try:
+            return self.session.execute(stmt).all()
+        except (Exception, SQLAlchemyError) as e:
+            logger.exception(f"Failed to execute statement: {e}")
+            raise DatabaseException("Unable to execute statement") from e
+
 
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
