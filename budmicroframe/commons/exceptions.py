@@ -112,3 +112,48 @@ class SuppressAndLog:
             return result
 
         return wrapper
+
+
+class ClientException(Exception):
+    """A custom exception class for client-related errors.
+
+    This exception can be raised when client requests fail or encounter issues.
+
+    Attributes:
+        message (str): A human-readable string describing the database error.
+
+    Args:
+        message (str): The error message describing the database issue.
+    """
+
+    def __init__(self, message: str, status_code: int = 400):
+        """Initialize the ClientException with a message."""
+        self.message = message
+        self.status_code = status_code
+        super().__init__(self.message)
+
+    def __str__(self):
+        """Return a string representation of the database exception."""
+        return f"ClientException: {self.message}"
+
+
+class DatabaseException(Exception):
+    """A custom exception class for database-related errors.
+
+    This exception can be raised when database operations fail or encounter issues.
+
+    Attributes:
+        message (str): A human-readable string describing the database error.
+
+    Args:
+        message (str): The error message describing the database issue.
+    """
+
+    def __init__(self, message: str):
+        """Initialize the DatabaseException with a message."""
+        self.message = message
+        super().__init__(self.message)
+
+    def __str__(self):
+        """Return a string representation of the database exception."""
+        return f"DatabaseException: {self.message}"

@@ -1,13 +1,19 @@
+from datetime import UTC, datetime
 from typing import Any, Dict, Generic, List, Literal, Optional, Tuple, Type, TypeVar, Union
 
 from pydantic import PostgresDsn
-from sqlalchemy import asc, create_engine, desc, text
+from sqlalchemy import BigInteger as SqlAlchemyBigInteger
+from sqlalchemy import DateTime, asc, cast, create_engine, desc, func, inspect, text
+from sqlalchemy import String as SqlAlchemyString
+from sqlalchemy.dialects.postgresql import ARRAY as PostgresArray
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, scoped_session, sessionmaker
+from sqlalchemy.orm import Mapped, Session, mapped_column, scoped_session, sessionmaker
+from sqlalchemy.sql import Executable
 
 from ..commons import logging
 from ..commons.config import get_app_settings, get_secrets_settings
+from ..commons.exceptions import DatabaseException
 from ..commons.singleton import Singleton
 from ..commons.types import DBCreateSchemaType, DBUpdateSchemaType
 
@@ -112,6 +118,26 @@ class Database(metaclass=Singleton):
         session.close()
 
 
+class DBSession:
+    """Provides instance of database session."""
+    __slots__ = ("database", "session")
+    
+    def __init__(self, database: Optional[Database] = None):
+        self.database = database or Database()
+        self.session = None
+
+    def __enter__(self):
+        self.session = self.database.get_session()
+        return self.session
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.session:
+            self.database.close_session(self.session)
+            self.session = None
+        if exc_type:
+            logger.error("Failed to close database session: %s", exc_value)
+
+
 class CRUDMixin(Generic[ModelType, DBCreateSchemaType, DBUpdateSchemaType]):
     __slots__ = ("database", "session", "model")
 
@@ -136,6 +162,84 @@ class CRUDMixin(Generic[ModelType, DBCreateSchemaType, DBUpdateSchemaType]):
     def cleanup_session(self, session: Optional[Session] = None):
         if session is not None:
             self.database.close_session(session)
+
+    @staticmethod
+    async def validate_fields(model: Type[ModelType], fields: Dict[str, Any]) -> None:
+        """Validate that the given fields exist in the SQLAlchemy model.
+
+        Args:
+            model (Type[DeclarativeBase]): The SQLAlchemy model class to validate against.
+            fields (Dict[str, Any]): A dictionary of field names and their values to validate.
+
+        Raises:
+            DatabaseException: If an invalid field is found in the input.
+        """
+        for field in fields:
+            if not hasattr(model, field):
+                logger.error(f"Invalid field: '{field}' not found in {model.__name__} model")
+                raise DatabaseException(f"Invalid field: '{field}' not found in {model.__name__} model")
+
+    @staticmethod
+    async def generate_search_stmt(model: Type[ModelType], fields: Dict[str, Any]) -> List[Executable]:
+        """Generate search conditions for a SQLAlchemy model based on the provided fields.
+
+        Args:
+            model (Type[DeclarativeBase]): The SQLAlchemy model class to generate search conditions for.
+            fields (Dict): A dictionary of field names and their values to search by.
+
+        Returns:
+            List[Executable]: A list of SQLAlchemy search conditions.
+        """
+        # Inspect model columns
+        model_columns = inspect(model).columns
+
+        # Initialize list to store search conditions
+        search_conditions = []
+
+        # Iterate over search fields and generate conditions
+        for field, value in fields.items():
+            column = getattr(model, field)
+
+            # Check if column type is string like
+            if type(model_columns[field].type) is SqlAlchemyString:
+                search_conditions.append(func.lower(column).like(f"%{value.lower()}%"))
+            elif type(model_columns[field].type) is PostgresArray:
+                search_conditions.append(column.contains(value))
+            elif type(model_columns[field].type) is SqlAlchemyBigInteger:
+                search_conditions.append(cast(column, SqlAlchemyString).like(f"%{value}%"))
+            else:
+                search_conditions.append(column == value)
+
+        return search_conditions
+
+    @staticmethod
+    async def generate_sorting_stmt(
+        model: Type[ModelType], sort_details: List[Tuple[str, str]]
+    ) -> List[Executable]:
+        """Generate sorting conditions for a SQLAlchemy model based on the provided sort details.
+
+        Args:
+            model (Type[ModelType]): The SQLAlchemy model class to generate sorting conditions for.
+            sort_details (List[Tuple[str, str]]): A list of tuples, where each tuple contains a field name and a direction ('asc' or 'desc').
+
+        Returns:
+            List[Executable]: A list of SQLAlchemy sorting conditions.
+        """
+        sort_conditions = []
+
+        for field, direction in sort_details:
+            # Check if column exists, if not, skip
+            try:
+                _ = getattr(model, field)
+            except AttributeError:
+                continue
+
+            if direction == "asc":
+                sort_conditions.append(getattr(model, field))
+            else:
+                sort_conditions.append(getattr(model, field).desc())
+
+        return sort_conditions
 
     def insert(
         self,
@@ -346,3 +450,99 @@ class CRUDMixin(Generic[ModelType, DBCreateSchemaType, DBUpdateSchemaType]):
             logger.exception("Failed to execute raw query: %s", str(e))
         finally:
             self.cleanup_session(_session if session is None else None)
+
+    def execute_scalar(self, stmt: Executable, session: Optional[Session] = None) -> object:
+        """Execute a SQL statement and return a single result or None.
+
+        This method executes the given SQL statement and returns the result.
+
+        Args:
+            stmt (Executable): The SQLAlchemy statement to be executed.
+
+        Returns:
+            Any: The result of the executed statement.
+
+        Raises:
+            DatabaseException: If there's an error during the database operation.
+        """
+        _session = session or self.get_session()
+        try:
+            return _session.scalar(stmt)
+        except (Exception, SQLAlchemyError) as e:
+            logger.exception(f"Failed to execute scalar statement: {e}")
+            raise DatabaseException("Unable to execute scalar statement") from e
+
+    def scalar_one_or_none(self, stmt: Executable) -> object:
+        """Execute a SQL statement and return a single result or None.
+
+        This method executes the given SQL statement and returns either a single
+        scalar result or None if no results are found.
+
+        Args:
+            stmt (Executable): The SQLAlchemy statement to be executed.
+
+        Returns:
+            Any: The scalar result of the query, or None if no results are found.
+
+        Raises:
+            DatabaseException: If there's an error during the database operation.
+        """
+        try:
+            return self.session.execute(stmt).scalar_one_or_none()
+        except (Exception, SQLAlchemyError) as e:
+            logger.exception(f"Failed to get one model from database: {e}")
+            raise DatabaseException("Unable to get model from database") from e
+
+    def scalars_all(self, stmt: Executable) -> object:
+        """Scalars a SQL statement and return a single result or None.
+
+        This method executes the given SQL statement and returns the result.
+
+        Args:
+            stmt (Executable): The SQLAlchemy statement to be executed.
+
+        Returns:
+            Any: The result of the executed statement.
+
+        Raises:
+            DatabaseException: If there's an error during the database operation.
+        """
+        try:
+            return self.session.scalars(stmt).all()
+        except (Exception, SQLAlchemyError) as e:
+            logger.exception(f"Failed to execute statement: {e}")
+            raise DatabaseException("Unable to execute statement") from e
+
+    def execute_all(self, stmt: Executable) -> object:
+        """Execute a SQL statement and return a single result or None.
+
+        This method executes the given SQL statement and returns the result.
+
+        Args:
+            stmt (Executable): The SQLAlchemy statement to be executed.
+
+        Returns:
+            Any: The result of the executed statement.
+
+        Raises:
+            DatabaseException: If there's an error during the database operation.
+        """
+        try:
+            return self.session.execute(stmt).all()
+        except (Exception, SQLAlchemyError) as e:
+            logger.exception(f"Failed to execute statement: {e}")
+            raise DatabaseException("Unable to execute statement") from e
+
+
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC)
+    )
+    modified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC)
+    )
