@@ -348,3 +348,163 @@ async def restart_workflow(workflow_id: uuid.UUID) -> Response:
     """Restart a workflow by its ID."""
     response = await DaprWorkflow().restart_workflow(workflow_id)
     return response.to_http_response()
+
+
+@meta_router.post(
+    "/workflows/cleanup",
+    response_model=SuccessResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "model": ErrorResponse,
+            "description": "Cleanup operation failed due to internal error.",
+        }
+    },
+    description="Clean up old workflows from database and Dapr state store.",
+    tags=["Workflows"],
+)
+async def cleanup_workflows(
+    older_than_days: int,
+    statuses: list[str] | None = None,
+    limit: int | None = None,
+    purge_from_dapr: bool = True,
+    dry_run: bool = False,
+) -> Response:
+    """Clean up old workflows from both PostgreSQL database and Dapr state store.
+
+    This endpoint removes workflow runs and their associated steps from the database
+    that match the specified criteria. Optionally, it can also purge the workflow
+    instances from Dapr's workflow state store (Redis/Cosmos DB/etc).
+
+    Args:
+        older_than_days: Remove workflows older than this many days (based on modified_at).
+        statuses: List of workflow statuses to cleanup. If None, defaults to terminal states
+                 (COMPLETED, FAILED, TERMINATED).
+        limit: Maximum number of workflows to cleanup in this batch. If None, cleans all matching.
+        purge_from_dapr: If True, also purge workflow instances from Dapr state store.
+        dry_run: If True, only report what would be cleaned without actually deleting.
+
+    Returns:
+        Response: A SuccessResponse containing cleanup statistics with HTTP status code 200,
+                  or an ErrorResponse with HTTP status code 500 if cleanup fails.
+
+    Example:
+        >>> # Preview cleanup (dry run)
+        >>> response = await cleanup_workflows(older_than_days=30, dry_run=True)
+        >>> response.json()
+        {
+            "object": "info",
+            "message": "Workflow cleanup dry run completed",
+            "param": {
+                "workflows_scanned": 150,
+                "workflows_deleted": 150,
+                "steps_deleted": 450,
+                "dapr_purged": 148,
+                "errors": 2,
+                "dry_run": True
+            }
+        }
+
+        >>> # Actual cleanup
+        >>> response = await cleanup_workflows(older_than_days=30, limit=100)
+        >>> response.json()
+        {
+            "object": "info",
+            "message": "Workflow cleanup completed",
+            "param": {
+                "workflows_scanned": 100,
+                "workflows_deleted": 100,
+                "steps_deleted": 300,
+                "dapr_purged": 98,
+                "errors": 0,
+                "dry_run": False
+            }
+        }
+    """
+    try:
+        workflow_manager = DaprWorkflow()
+        stats = workflow_manager.cleanup_workflows(
+            older_than_days=older_than_days,
+            statuses=statuses,
+            limit=limit,
+            purge_from_dapr=purge_from_dapr,
+            dry_run=dry_run,
+        )
+
+        message = "Workflow cleanup dry run completed" if dry_run else "Workflow cleanup completed"
+
+        return SuccessResponse(message=message, param=stats, code=status.HTTP_200_OK).to_http_response()
+
+    except Exception as e:
+        logger.exception("Workflow cleanup failed: %s", str(e))
+        return ErrorResponse(
+            message=f"Workflow cleanup failed: {str(e)}", code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        ).to_http_response()
+
+
+@meta_router.get(
+    "/workflows/cleanup/candidates",
+    response_model=SuccessResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "model": ErrorResponse,
+            "description": "Failed to retrieve cleanup candidates due to internal error.",
+        }
+    },
+    description="Get information about workflows eligible for cleanup.",
+    tags=["Workflows"],
+)
+async def get_cleanup_candidates(
+    older_than_days: int, statuses: list[str] | None = None, limit: int | None = None
+) -> Response:
+    """Get information about workflows that would be cleaned up without performing deletion.
+
+    This endpoint queries the database to find workflows matching the cleanup criteria
+    and returns statistics without performing any deletion. Useful for planning cleanup
+    operations and understanding what will be affected.
+
+    Args:
+        older_than_days: Check for workflows older than this many days (based on modified_at).
+        statuses: List of workflow statuses to check. If None, defaults to terminal states
+                 (COMPLETED, FAILED, TERMINATED).
+        limit: Maximum number of workflows to include in results. If None, checks all matching.
+
+    Returns:
+        Response: A SuccessResponse containing candidate information with HTTP status code 200,
+                  or an ErrorResponse with HTTP status code 500 if the operation fails.
+
+    Example:
+        >>> response = await get_cleanup_candidates(older_than_days=30)
+        >>> response.json()
+        {
+            "object": "info",
+            "message": "Found 150 workflows eligible for cleanup",
+            "param": {
+                "count": 150,
+                "oldest_workflow_age_days": 45,
+                "newest_workflow_age_days": 30,
+                "by_status": {
+                    "COMPLETED": 120,
+                    "FAILED": 25,
+                    "TERMINATED": 5
+                },
+                "sample_workflows": ["uuid1", "uuid2", "uuid3", ...]
+            }
+        }
+    """
+    try:
+        workflow_manager = DaprWorkflow()
+        candidates = workflow_manager.get_cleanup_candidates(
+            older_than_days=older_than_days, statuses=statuses, limit=limit
+        )
+
+        message = f"Found {candidates['count']} workflows eligible for cleanup"
+
+        return SuccessResponse(message=message, param=candidates, code=status.HTTP_200_OK).to_http_response()
+
+    except Exception as e:
+        logger.exception("Failed to get cleanup candidates: %s", str(e))
+        return ErrorResponse(
+            message=f"Failed to get cleanup candidates: {str(e)}", code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        ).to_http_response()

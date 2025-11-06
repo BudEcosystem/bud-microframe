@@ -12,8 +12,7 @@ from dapr.ext.workflow import (
 )
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session, relationship
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from ..commons import logging, singleton
@@ -27,8 +26,7 @@ from ..commons.schemas import (
     WorkflowStep,
 )
 from .dapr_service import DaprService
-from .psql_service import CRUDMixin, PSQLBase
-
+from .psql_service import CRUDMixin, PSQLBase, DBSession
 
 logger = logging.get_logger(__name__)
 
@@ -176,12 +174,25 @@ class WorkflowCRUD:
 
         try:
             if step:
-                logger.debug("Workflow step found for %s:%s, %s:%s, %s", workflow_id, step.step_id, notification_hash, step.status, step.notification_status)
+                logger.debug(
+                    "Workflow step found for %s:%s, %s:%s, %s",
+                    workflow_id,
+                    step.step_id,
+                    notification_hash,
+                    step.status,
+                    step.notification_status,
+                )
                 skip_notification = update_notification_status(step)
                 step.status = workflow_or_step_status
                 self.workflow_steps_crud.update(data=step, conditions={"id": step.id})
             else:
-                logger.debug("Workflow run found for %s, %s:%s, %s", workflow_id, notification_hash, run.status, run.notification_status)
+                logger.debug(
+                    "Workflow run found for %s, %s:%s, %s",
+                    workflow_id,
+                    notification_hash,
+                    run.status,
+                    run.notification_status,
+                )
                 skip_notification = update_notification_status(run)
                 if notification.payload.event == "results":
                     run.output = notification.payload.content.result
@@ -648,3 +659,233 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
                 return ErrorResponse(message="Workflow runtime not initialized", code=502)
             else:
                 return ErrorResponse(message="Failed to restart workflow", code=500)
+
+    def cleanup_workflows(
+        self,
+        older_than_days: int,
+        statuses: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+        purge_from_dapr: bool = True,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Clean up old workflows from database and optionally from Dapr state.
+
+        This method removes workflow runs and their associated steps from the database
+        that match the specified criteria. Optionally, it can also purge the workflow
+        instances from Dapr's workflow state store.
+
+        Args:
+            older_than_days: Remove workflows older than this many days (based on modified_at).
+            statuses: List of workflow statuses to cleanup. If None, defaults to terminal states
+                     (COMPLETED, FAILED, TERMINATED).
+            limit: Maximum number of workflows to cleanup in this batch. If None, cleans all matching.
+            purge_from_dapr: If True, also purge workflow instances from Dapr state store.
+            dry_run: If True, only report what would be cleaned without actually deleting.
+
+        Returns:
+            Dict containing cleanup statistics:
+                - workflows_scanned: Number of workflows checked
+                - workflows_deleted: Number of workflow runs deleted from database
+                - steps_deleted: Number of workflow steps deleted from database
+                - dapr_purged: Number of workflows purged from Dapr
+                - errors: Number of errors encountered
+                - dry_run: Whether this was a dry run
+
+        Example:
+            >>> workflow_manager = DaprWorkflow()
+            >>> # Dry run to see what would be cleaned
+            >>> stats = workflow_manager.cleanup_workflows(older_than_days=30, dry_run=True)
+            >>> print(f"Would cleanup {stats['workflows_scanned']} workflows")
+            >>>
+            >>> # Actually cleanup completed workflows older than 7 days
+            >>> stats = workflow_manager.cleanup_workflows(older_than_days=7, statuses=["COMPLETED"], limit=100)
+        """
+        from datetime import UTC, datetime, timedelta
+
+        # Default to terminal states if not specified
+        if statuses is None:
+            statuses = [WorkflowStatus.COMPLETED.value, WorkflowStatus.FAILED.value, WorkflowStatus.TERMINATED.value]
+
+        cutoff_date = datetime.now(UTC) - timedelta(days=older_than_days)
+
+        logger.info(
+            "Starting workflow cleanup: older_than_days=%d, statuses=%s, limit=%s, purge_from_dapr=%s, dry_run=%s",
+            older_than_days,
+            statuses,
+            limit,
+            purge_from_dapr,
+            dry_run,
+        )
+
+        stats = {
+            "workflows_scanned": 0,
+            "workflows_deleted": 0,
+            "steps_deleted": 0,
+            "dapr_purged": 0,
+            "errors": 0,
+            "dry_run": dry_run,
+        }
+
+        try:
+
+            with DBSession() as session:
+                # Query workflows eligible for cleanup
+                query = session.query(WorkflowRunsSchema).filter(
+                    WorkflowRunsSchema.status.in_(statuses), WorkflowRunsSchema.modified_at < cutoff_date
+                )
+
+                if limit:
+                    query = query.limit(limit)
+
+                workflows_to_cleanup = query.all()
+                stats["workflows_scanned"] = len(workflows_to_cleanup)
+
+                for workflow in workflows_to_cleanup:
+                    workflow_id = str(workflow.workflow_id)
+
+                    try:
+                        if dry_run:
+                            # Count steps that would be deleted
+                            step_count = (
+                                session.query(WorkflowStepsSchema)
+                                .filter(WorkflowStepsSchema.workflow_id == workflow.workflow_id)
+                                .count()
+                            )
+                            stats["steps_deleted"] += step_count
+                            stats["workflows_deleted"] += 1
+
+                            logger.info(
+                                "[DRY RUN] Would cleanup workflow %s (status=%s, age=%d days, steps=%d)",
+                                workflow_id,
+                                workflow.status,
+                                (datetime.now(UTC) - workflow.modified_at).days,
+                                step_count,
+                            )
+
+                            if purge_from_dapr:
+                                stats["dapr_purged"] += 1
+                        else:
+                            # Delete workflow steps (cascade)
+                            step_count = (
+                                session.query(WorkflowStepsSchema)
+                                .filter(WorkflowStepsSchema.workflow_id == workflow.workflow_id)
+                                .delete()
+                            )
+                            stats["steps_deleted"] += step_count
+
+                            # Delete workflow run
+                            session.query(WorkflowRunsSchema).filter(
+                                WorkflowRunsSchema.workflow_id == workflow.workflow_id
+                            ).delete()
+                            stats["workflows_deleted"] += 1
+
+                            # Purge from Dapr if enabled
+                            if purge_from_dapr and self.wf_client:
+                                try:
+                                    self.wf_client.purge_workflow(workflow_id)
+                                    stats["dapr_purged"] += 1
+                                    logger.debug("Purged workflow %s from Dapr", workflow_id)
+                                except Exception as e:
+                                    logger.warning("Failed to purge workflow %s from Dapr: %s", workflow_id, str(e))
+                                    # Don't fail cleanup if Dapr purge fails
+
+                            logger.info(
+                                "Cleaned up workflow %s (status=%s, age=%d days, steps=%d)",
+                                workflow_id,
+                                workflow.status,
+                                (datetime.now(UTC) - workflow.modified_at).days,
+                                step_count,
+                            )
+
+                    except Exception as e:
+                        logger.exception("Failed to cleanup workflow %s: %s", workflow_id, str(e))
+                        stats["errors"] += 1
+
+                if not dry_run:
+                    session.commit()
+
+        except Exception as e:
+            logger.exception("Workflow cleanup failed: %s", str(e))
+            stats["errors"] += 1
+
+        logger.info("Workflow cleanup completed: %s", stats)
+        return stats
+
+    def get_cleanup_candidates(
+        self, older_than_days: int, statuses: Optional[List[str]] = None, limit: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Get information about workflows that would be cleaned up.
+
+        This method queries the database to find workflows matching the cleanup criteria
+        and returns statistics without performing any deletion.
+
+        Args:
+            older_than_days: Check for workflows older than this many days (based on modified_at).
+            statuses: List of workflow statuses to check. If None, defaults to terminal states
+                     (COMPLETED, FAILED, TERMINATED).
+            limit: Maximum number of workflows to include in results. If None, checks all matching.
+
+        Returns:
+            Dict containing information about cleanup candidates:
+                - count: Total number of workflows that would be cleaned
+                - oldest_workflow_age_days: Age in days of the oldest workflow
+                - newest_workflow_age_days: Age in days of the newest workflow
+                - by_status: Breakdown of workflow counts by status
+                - sample_workflows: List of up to 10 sample workflow IDs
+
+        Example:
+            >>> workflow_manager = DaprWorkflow()
+            >>> candidates = workflow_manager.get_cleanup_candidates(older_than_days=30)
+            >>> print(f"Found {candidates['count']} workflows to cleanup")
+            >>> print(f"By status: {candidates['by_status']}")
+        """
+        from datetime import UTC, datetime, timedelta
+
+        # Default to terminal states if not specified
+        if statuses is None:
+            statuses = [WorkflowStatus.COMPLETED.value, WorkflowStatus.FAILED.value, WorkflowStatus.TERMINATED.value]
+
+        cutoff_date = datetime.now(UTC) - timedelta(days=older_than_days)
+
+        result = {
+            "count": 0,
+            "oldest_workflow_age_days": None,
+            "newest_workflow_age_days": None,
+            "by_status": {},
+            "sample_workflows": [],
+        }
+
+        try:
+            from .psql_service import DBSession
+
+            with DBSession() as session:
+                # Get count and samples
+                query = session.query(WorkflowRunsSchema).filter(
+                    WorkflowRunsSchema.status.in_(statuses), WorkflowRunsSchema.modified_at < cutoff_date
+                )
+
+                if limit:
+                    query = query.limit(limit)
+
+                workflows = query.all()
+                result["count"] = len(workflows)
+
+                if workflows:
+                    # Calculate age statistics
+                    now = datetime.now(UTC)
+                    ages = [(now - wf.modified_at).days for wf in workflows]
+                    result["oldest_workflow_age_days"] = max(ages)
+                    result["newest_workflow_age_days"] = min(ages)
+
+                    # Count by status
+                    for workflow in workflows:
+                        status = workflow.status
+                        result["by_status"][status] = result["by_status"].get(status, 0) + 1
+
+                    # Sample workflow IDs (up to 10)
+                    result["sample_workflows"] = [str(wf.workflow_id) for wf in workflows[:10]]
+
+        except Exception as e:
+            logger.exception("Failed to get cleanup candidates: %s", str(e))
+
+        return result
