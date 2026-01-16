@@ -467,67 +467,103 @@ class DaprService(DaprClient):
         self,
         data: Dict[str, Any],
         pubsub_name: Optional[str] = None,
-        target_topic_name: Optional[str] = None,
+        target_topic_name: Optional[Union[str, List[str]]] = None,
         target_name: Optional[str] = None,
         source_topic_name: Optional[str] = None,
         source_name: Optional[str] = None,
         event_type: Optional[str] = None,
-    ) -> str:
-        """Publish data to a specified pubsub topic.
+    ) -> Union[str, List[str]]:
+        """Publish data to one or more specified pubsub topics.
 
         Args:
             data (Dict[str, Any]): The data to publish.
-            pubsub_name (Optional[str]): The name of the pubsub component. If not provided, uses the default from app settings.
-            target_topic_name (Optional[str]): The name of the topic to publish to. Either this or target_name must be provided.
-            target_name (Optional[str]): The name of the target service. Used to resolve the topic name if target_topic_name is not provided.
-            source_topic_name (Optional[str]): The name of the source topic. If not provided, uses the default from app settings.
-            source_name (str): The app name of the source event. Defaults to the value of `app_settings.name`.
-            event_type (Optional[str]): The type of the event. If provided, it will be included in the CloudEvent metadata.
+            pubsub_name (Optional[str]): The name of the pubsub component.
+                If not provided, uses the default from app settings.
+            target_topic_name (Optional[Union[str, List[str]]]): The name(s) of the topic(s) to publish to.
+                Can be a single topic name (str) or multiple topic names (List[str]).
+                Either this or target_name must be provided.
+            target_name (Optional[str]): The name of the target service.
+                Used to resolve the topic name if target_topic_name is not provided.
+            source_topic_name (Optional[str]): The name of the source topic.
+                If not provided, uses the default from app settings.
+            source_name (str): The app name of the source event.
+                Defaults to the value of `app_settings.name`.
+            event_type (Optional[str]): The type of the event.
+                If provided, it will be included in the CloudEvent metadata.
 
         Returns:
-            str: The ID of the published CloudEvent.
+            Union[str, List[str]]:
+                - If target_topic_name is a str, returns a single event_id (str)
+                - If target_topic_name is a List[str], returns a list of event_ids (List[str])
 
         Raises:
-            DaprInternalError: If there's an error while publishing the event.
-            AssertionError: If neither target_topic_name nor target_name is provided, or if pubsub is not configured.
+            DaprInternalError: If there's an error while publishing the event to any topic.
+            AssertionError: If neither target_topic_name nor target_name is provided,
+                or if pubsub is not configured.
+            ValueError: If target_topic_name is an empty list.
+            TypeError: If target_topic_name is not str, List[str], or None.
 
         Note:
-            - If 'workflow' is not in the data and event_type is provided, event_type is used as the workflow.
+            - Publications are performed sequentially (fail-fast on first error).
+            - Each topic publication receives a unique event_id.
         """
         app_settings = get_app_settings()
-        assert target_topic_name or target_name, "Either target_topic_name or target_name is required."
+        assert target_topic_name is not None or target_name, "Either target_topic_name or target_name is required."
         assert source_name or (app_settings is not None and app_settings.name is not None), "Source name is not set"
+
+        # Track input type for return type preservation
+        input_was_string = isinstance(target_topic_name, str)
+
+        # Normalize to list for unified processing
         if target_topic_name is None:
+            # Resolve from target_name via metadata lookup
             metadata = self.get_service_metadata_by_id(str(target_name))
-            target_topic_name = metadata.get("topic") if isinstance(metadata, dict) else None
-            assert target_topic_name, f"Failed to resolve pubsub topic for {target_name}"
+            resolved_topic = metadata.get("topic") if isinstance(metadata, dict) else None
+            assert resolved_topic, f"Failed to resolve pubsub topic for {target_name}"
+            topic_names = [resolved_topic]
+        elif isinstance(target_topic_name, str):
+            topic_names = [target_topic_name]
+        elif isinstance(target_topic_name, list):
+            if len(target_topic_name) == 0:
+                raise ValueError("target_topic_name list cannot be empty")
+            topic_names = target_topic_name
+        else:
+            raise TypeError(f"target_topic_name must be str or List[str], got {type(target_topic_name)}")
 
         pubsub_name = pubsub_name or app_settings.pubsub_name
         source_topic_name = source_topic_name or app_settings.pubsub_topic
         assert pubsub_name, "pubsub is not configured."
 
-        event_id = str(uuid.uuid4())
-        publish_metadata = {
-            "cloudevent.id": event_id,
-            "cloudevent.source": source_name,
-            "cloudevent.type": event_type,
-        }
-        publish_metadata = {k: v for k, v in publish_metadata.items() if v is not None}
+        # Apply data enrichment once before loop
         data.update({"source": source_name, "source_topic": source_topic_name})
         if data.get("type") is None and event_type is not None:
             data["type"] = event_type
 
-        self.publish_event(
-            pubsub_name=pubsub_name,
-            topic_name=target_topic_name,
-            data=json.dumps(data) if not isinstance(data, str) else data,
-            data_content_type="application/cloudevents+json",
-            publish_metadata=publish_metadata,
-        )
+        # Publish to each topic with unique event IDs
+        event_ids = []
+        for topic_name in topic_names:
+            event_id = str(uuid.uuid4())  # Unique per topic
 
-        logger.info("Published to pubsub topic %s/%s", pubsub_name, target_topic_name)
+            publish_metadata = {
+                "cloudevent.id": event_id,
+                "cloudevent.source": source_name,
+                "cloudevent.type": event_type,
+            }
+            publish_metadata = {k: v for k, v in publish_metadata.items() if v is not None}
 
-        return event_id
+            self.publish_event(
+                pubsub_name=pubsub_name,
+                topic_name=topic_name,
+                data=json.dumps(data) if not isinstance(data, str) else data,
+                data_content_type="application/cloudevents+json",
+                publish_metadata=publish_metadata,
+            )
+
+            logger.info("Published to pubsub topic %s/%s with event_id %s", pubsub_name, topic_name, event_id)
+            event_ids.append(event_id)
+
+        # Return appropriate type based on input
+        return event_ids[0] if input_was_string else event_ids
 
 
 class DaprServiceCrypto(DaprService):

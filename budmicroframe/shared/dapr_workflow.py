@@ -285,10 +285,27 @@ class DaprWorkflow(WorkflowCRUD, metaclass=singleton.Singleton):
         self,
         workflow_id: str,
         notification: NotificationRequest,
-        target_topic_name: Optional[str] = None,
+        target_topic_name: Optional[Union[str, List[str]]] = None,
         target_name: Optional[str] = None,
         is_replaying: bool = False,
     ) -> None:
+        """Publish notification to notify service and/or target topics.
+
+        Args:
+            workflow_id (str): The workflow identifier
+            notification (NotificationRequest): The notification to publish
+            target_topic_name (Optional[Union[str, List[str]]]): Target topic(s) to publish to.
+                Can be a single topic or list of topics.
+            target_name (Optional[str]): Target service name for topic resolution
+            is_replaying (bool): Whether this is a replay notification
+
+        Returns:
+            None
+
+        Note:
+            - Publications to notify service and target topics are independent.
+            - Errors in one destination don't affect the other.
+        """
         skip_notification = self.update_workflow_progress(workflow_id, notification)
         if skip_notification:
             logger.info("Skipping notification for %s:%s", notification.payload.type, notification.payload.event)
