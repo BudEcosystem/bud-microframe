@@ -165,7 +165,7 @@ class CloudEventBase(BaseModel):
     topic: Optional[str] = None
     pubsubname: Optional[str] = None
     source: Optional[str] = None
-    source_topic: Optional[str] = None
+    source_topic: Optional[Union[str, List[str]]] = None  # Supports multi-topic notification (D-001)
 
     data: Optional[Dict[str, Any]] = None
 
